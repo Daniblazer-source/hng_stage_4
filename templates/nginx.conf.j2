@@ -1,0 +1,43 @@
+events {
+    worker_connections 1024;
+}
+
+http {
+    # Required Log Format: $time_iso8601 | $status | ${request_time}s | $upstream_addr | $request
+    log_format swift_log '$time_iso8601 | $status | ${request_time}s | $upstream_addr | $request';
+    access_log /var/log/nginx/access.log swift_log;
+
+    upstream api_service {
+        server api:{{ service_port }};
+    }
+
+    server {
+        listen {{ nginx_port }};
+
+        # Add the required header
+        add_header X-Deployed-By swiftdeploy;
+
+        location / {
+            proxy_pass http://api_service;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            
+            # Forward X-Mode from the upstream API
+            proxy_pass_header X-Mode;
+
+            # Apply the timeout from manifest
+            proxy_read_timeout {{ proxy_timeout }};
+            proxy_connect_timeout {{ proxy_timeout }};
+            proxy_send_timeout {{ proxy_timeout }};
+
+            # Custom JSON errors for 502/503/504
+            error_page 502 503 504 /error_json;
+        }
+
+        location = /error_json {
+            internal;
+            return 502 '{"error": "Service Unavailable", "code": 502, "service": "swiftdeploy-api", "contact": "admin@swiftdeploy.local"}';
+            add_header Content-Type application/json;
+        }
+    }
+}
