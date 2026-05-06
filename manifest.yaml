@@ -10,3 +10,4 @@ nginx:
 services:
   image: swift-deploy-1-node:latest
   port: 3000
+project_name: hng_4

@@ -1,8 +1,9 @@
 # API Service Dependencies
 fastapi==0.110.0
 uvicorn==0.27.0
+prometheus-client==0.20.0
 
 # CLI Tool Dependencies
 PyYAML==6.0.1
 Jinja2==3.1.3
-requests==2.31.0  # Helpful for the CLI health checks
+requests==2.31.0
