@@ -28,6 +28,23 @@ def load_manifest():
     with open(MANIFEST_FILE, 'r') as f:
         return yaml.safe_load(f)
 
+def ensure_opa_running():
+    """Ensures the OPA gate is active before querying policies."""
+    print("🛡️  Verifying Policy Gate (OPA)...")
+    try:
+        # Check if the OPA container is running
+        result = subprocess.run(['docker', 'ps', '--filter', 'name=opa', '--quiet'], capture_output=True, text=True)
+        if not result.stdout.strip():
+            print("🚀 OPA is not running. Initializing Security Gate...")
+            # We use the 'opa' service defined in your docker-compose.yml
+            subprocess.run(['docker', 'compose', 'up', '-d', 'opa'], check=True)
+            print("⏳ Waiting for OPA to initialize...")
+            time.sleep(3) # Give OPA time to load policies from the volume
+        else:
+            print("✅ Policy Gate is active.")
+    except Exception as e:
+        print(f"⚠️  Warning: Could not auto-start OPA: {e}")
+
 def generate_config():
     """Generates docker-compose.yml from the Jinja2 template."""
     config = load_manifest()
@@ -36,7 +53,7 @@ def generate_config():
         return
     with open(TEMPLATE_FILE, 'r') as f:
         template = Template(f.read())
-    
+
     rendered = template.render(config=config)
     with open("docker-compose.yml", "w") as f:
         f.write(rendered)
@@ -54,7 +71,7 @@ def log_audit(event_type, data, result_list):
 
 def query_opa(domain, input_data, retries=5):
     """STRICT: No skipping. Must connect to OPA or fail."""
-    print(f"🔍 Contacting OPA at {OPA_URL}/{domain}...")
+    print(f"🔍 Querying OPA Policy: {domain}...")
     for i in range(retries):
         try:
             url = f"{OPA_URL}/{domain}"
@@ -62,20 +79,18 @@ def query_opa(domain, input_data, retries=5):
             if response.status_code == 200:
                 res_json = response.json().get("result")
                 if res_json is not None:
-                    # Capture violations from the 'violation' key (Standard HNG Stage 4b)
                     denials = res_json.get("violation", [])
                     log_audit(f"check_{domain}", input_data, denials)
                     return (False, denials) if denials else (True, [])
-            print(f"⏳ OPA connected, but policy not loaded... ({i+1}/{retries})")
+            print(f"⏳ OPA responding, but policy not ready... ({i+1}/{retries})")
         except Exception as e:
             print(f"⏳ Connection failed: {e}. Retrying... ({i+1}/{retries})")
         time.sleep(2)
-    return False, ["Could not connect to Policy Engine"]
+    return False, ["Could not connect to Policy Engine after retries"]
 
 def get_host_stats():
     """Fetches real host metrics for OPA evaluation."""
     _, _, free = shutil.disk_usage("/")
-    # Using os.getloadavg() for CPU, defaulting to 0.5 if unavailable
     cpu_load = os.getloadavg()[0] if hasattr(os, 'getloadavg') else 0.5
     return {
         "disk_free_gb": free // (2**30),
@@ -88,37 +103,33 @@ def status():
     print("Press Ctrl+C to exit.")
     try:
         while True:
-            # Clear screen (standard DevOps trick)
             os.system('cls' if os.name == 'nt' else 'clear')
             print(f"Time: {datetime.now().strftime('%H:%M:%S')}")
-            
-            # 1. Scrape Metrics (Assume API is on 8081 via Nginx or direct)
             try:
-                # Scrape your API metrics endpoint
+                # Assuming port 3000 as per your previous setup
                 m = requests.get("http://localhost:3000/metrics", timeout=2).text
                 print(f"📈 Metrics Scraped: Found {len(m.splitlines())} lines.")
             except:
                 print("📈 Metrics: API Unreachable")
 
-            # 2. Show Host Health
             stats = get_host_stats()
             print(f"🖥  Host: CPU Load: {stats['cpu_load']} | Disk Free: {stats['disk_free_gb']}GB")
-            
-            # 3. Log to history.jsonl
             log_audit("status_scrape", stats, [])
-            
             time.sleep(5)
     except KeyboardInterrupt:
         print("\nExiting status dashboard.")
 
 def deploy():
-    # 1. Pre-deploy Policy Check (Gated Lifecycle)
+    # 0. Ensure OPA is running first!
+    ensure_opa_running()
+
+    # 1. Pre-deploy Policy Check
     print("--- Pre-Deploy: Infrastructure Policy Check ---")
     infra_data = get_host_stats()
     allowed, reasons = query_opa("infra", infra_data)
 
     if not allowed:
-        print(f"❌ DEPLOY BLOCKED: {reasons}")
+        print(f"❌ DEPLOY BLOCKED by Policy: {reasons}")
         sys.exit(1)
 
     print("✅ Infrastructure standards met. Proceeding with deployment...")
@@ -141,9 +152,7 @@ def audit():
         with open(HISTORY_FILE, "r") as f:
             for line in f:
                 d = json.loads(line)
-                # Ignore status scrapes for the high-level report to keep it clean
                 if d['event'] == "status_scrape": continue
-                
                 res = "❌ FAIL" if d['opa_result'] else "✅ PASS"
                 det = ", ".join(d['opa_result']) if d['opa_result'] else "Compliant"
                 r.write(f"| {d['timestamp']} | {d['event']} | {res} | {det} |\n")
