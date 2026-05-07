@@ -73,3 +73,41 @@ The `manifest.yaml` acts as the single source of truth for the deployment:
 `nginx`: Proxy port and timeout settings.
 
 `mode`: Current environment state (stable/canary).
+
+
+# SwiftDeploy: Policy-Gated Orchestrator (Stage 4b)
+
+SwiftDeploy is a declarative infrastructure-as-code tool designed to manage a containerized API stack. Building on Stage 4a, this version introduces **Policy-as-Code (OPA)** and **Real-time Observability**.
+
+## 🚀 New Features
+- **Hard Gate Deployment:** Every deployment is now gated by Open Policy Agent (OPA). The CLI scrapes host telemetry (Disk/CPU) and evaluates it against Rego policies before execution.
+- **Service Instrumentation:** The FastAPI app is instrumented with `prometheus_client`, exposing a `/metrics` endpoint for throughput, latency, and error tracking.
+- **Chaos Engineering:** A `/chaos` endpoint allows for simulated latency spikes to test "Canary Safety" policies.
+- **Automated Auditing:** All policy decisions and deployment states are logged and exported to `audit_report.md`.
+
+## 🛠️ Usage
+
+### 1. Initialize the Stack
+Generates the `docker-compose.yml` and `nginx.conf` from secure templates.
+```bash
+./swiftdeploy init
+```
+### 2. Gated Deployment
+Queries the OPA sidecar (infra.rego) to ensure the host meets health standards (Disk > 10GB, Load < 2.0) before starting containers.
+```bash
+./swiftdeploy deploy
+```
+### 3. Real-time Status
+A live dashboard that scrapes Prometheus metrics and host stats every 5 seconds.
+```bash
+./swiftdeploy status
+```
+### 4. Audit Trail
+Generates a Markdown report of all deployment history.
+```bash
+./swiftdeploy audit
+```
+# 🧠 Policy Architecture
+Infrastructure Policy: Located in `policies/infra.rego`. Blocks deployment if system resources are critical.
+
+Canary Policy: Located in `policies/canary.rego`. Monitors the API for high error rates or P99 latency before allowing a "Stable" promotion.
